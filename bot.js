@@ -83,6 +83,7 @@ async function forwardMyTweets(tweetCount = 5) {
 
         const params = {
             max_results: tweetCount,
+            exclude: "retweets", // Exclude retweets
         };
 
         if (lastTweetId) {
@@ -94,18 +95,27 @@ async function forwardMyTweets(tweetCount = 5) {
         const tweets = tweetsPaginator._realData?.data;
 
         if (!tweets || !Array.isArray(tweets) || tweets.length === 0) {
-            throw new Error('No new tweets found.');
+            console.log('No new tweets found.');
+            return;
         }
 
         lastTweetId = tweets[0].id;
 
-
-
         for (const tweet of tweets) {
-            const message = `New tweet from @${user.data.username}:\n\n${tweet.text}\n\nPosted at: ${tweet.created_at}`;
+            const message = `<b>New tweet from @${user.data.username}</b>:\n\n${tweet.text}\n`;
+            const tweetUrl = `https://x.com/${user.data.username}/status/${tweet.id}`;
+
+            const options = {
+                parse_mode: 'HTML',
+                reply_markup: JSON.stringify({
+                    inline_keyboard: [
+                        [{ text: 'View Tweet', url: tweetUrl }]
+                    ]
+                })
+            };
 
             for (const chatId of chatIds) {
-                await bot.sendMessage(chatId, message);
+                await bot.sendMessage(chatId, message, options);
 
                 const mediaAttachments = tweetsPaginator.includes?.media;
                 if (mediaAttachments && Array.isArray(mediaAttachments) && mediaAttachments.length > 0) {
@@ -126,9 +136,8 @@ async function forwardMyTweets(tweetCount = 5) {
         }
     }
 }
-
 cron.schedule('*/5 * * * *', () => {
-    forwardMyTweets(10);
+    forwardMyTweets(5);
     console.log('Forwarding tweets to all registered chat IDs...');
 });
 
