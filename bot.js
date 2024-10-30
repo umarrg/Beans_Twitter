@@ -1,152 +1,139 @@
 require('dotenv').config();
 const express = require('express');
-const { TwitterApi } = require('twitter-api-v2');
+const { TwitterApi, ETwitterStreamEvent } = require('twitter-api-v2');
 const TelegramBot = require('node-telegram-bot-api');
-const cron = require('node-cron');
 
 const app = express();
-app.use(express.json())
-const PORT = 3000;
-const twitterClient = new TwitterApi({
-    appKey: "XhyEJFXfVCXQnBiHPZN3aEmOn",
-    appSecret: "ucyN1tqyu6mDLRBDdGufp50R4cIjWqhCnnxXru13K1JhqRlbdi",
-    accessToken: "1794758198743781376-Pvy5djKmDMHtfPxNvTd6a5I4bUdzDz",
-    accessSecret: "qL8056yWsdhFK7GEL42j5qBBV0YEHLIJtbw5MhmNvFrMA",
-});
+app.use(express.json());
+
+const PORT = process.env.PORT || 3000;
+
+
+const twitterClient = new TwitterApi(process.env.TWITTER_BEARER_TOKEN);
 
 const bot = new TelegramBot(process.env.TOKEN, { polling: true });
 
-const chatId = process.env.TELEGRAM_CHAT_ID;
 const chatIds = new Set();
 
-async function forwardTweets(chatId, username, tweetCount = 5) {
+// Function to start the stream
+async function startStream() {
     try {
-        const user = await twitterClient.v2.userByUsername(username);
+        // Delete existing rules
+        const existingRules = await twitterClient.v2.streamRules();
+        if (existingRules.data?.length) {
+            const ids = existingRules.data.map(rule => rule.id);
+            await twitterClient.v2.updateStreamRules({
+                delete: { ids: ids },
+            });
+            console.log('Deleted existing stream rules.');
+        }
 
-        const tweets = await twitterClient.v2.userTimeline(user.data.id, {
-            max_results: tweetCount,
-            expansions: ['attachments.media_keys'],
-            'tweet.fields': ['created_at', 'text'],
-            'media.fields': ['url', 'type']
+        // Add new rules
+        const rules = [
+            { value: `from:${process.env.TWITTER_USER_ID}`, tag: 'User Tweets' },
+        ];
+
+        await twitterClient.v2.updateStreamRules({
+            add: rules,
+        });
+        console.log('Added new stream rules.');
+
+        // Start stream
+        const stream = await twitterClient.v2.searchStream({
+            'tweet.fields': ['author_id', 'text', 'created_at'],
         });
 
-        if (!tweets.data || !Array.isArray(tweets.data)) {
-            throw new Error('No tweets found or data format is incorrect.');
-        }
+        stream.autoReconnect = true;
 
-        for (const tweet of tweets.data) {
-            const message = `New tweet from @${username}:\n\n${tweet.text}\n`;
+        stream.on(ETwitterStreamEvent.Data, async tweet => {
+            console.log('Received tweet:', tweet.data.text);
+            await forwardTweet(tweet.data);
+        });
 
-            await bot.sendMessage(chatId, message);
+        stream.on(ETwitterStreamEvent.Error, error => {
+            console.error('Stream error:', error);
+        });
 
-            const mediaAttachments = tweets.includes?.media;
-            if (mediaAttachments && Array.isArray(mediaAttachments) && mediaAttachments.length > 0) {
-                for (const media of mediaAttachments) {
-                    if (media.type === 'photo') {
-                        await bot.sendPhoto(chatId, media.url);
-                    } else if (media.type === 'video') {
-                        await bot.sendVideo(chatId, media.url);
-                    }
-                }
-            }
-        }
+        stream.on(ETwitterStreamEvent.ConnectionError, err => {
+            console.error('Connection error:', err);
+        });
+
+        stream.on(ETwitterStreamEvent.ConnectionClosed, () => {
+            console.log('Connection closed. Reconnecting...');
+            startStream();
+        });
+
+        console.log('Stream started and listening for tweets...');
     } catch (error) {
-        console.error('Error fetching tweets:', error.message);
-        bot.sendMessage(chatId, `Error fetching tweets from @${username}: ${error.message}`);
+        console.error('Error starting stream:', error);
     }
 }
 
-bot.on('message', (msg) => {
-    const chatId = msg.chat.id;
+async function forwardTweet(tweet) {
+    const tweetUrl = `https://twitter.com/${process.env.TWITTER_USERNAME}/status/${tweet.id}`;
+    const message = `<b>New tweet from @${process.env.TWITTER_USERNAME}</b>:\n\n${tweet.text}\n<a href="${tweetUrl}">View Tweet</a>`;
 
-    if (msg.chat.type === 'group' || msg.chat.type === 'supergroup') {
-        const groupId = msg.chat.id;
+    const options = {
+        parse_mode: 'HTML',
+        disable_web_page_preview: true,
+    };
 
-        bot.sendMessage(groupId, 'I am now watching tweets!');
-
-        const twitterUsername = process.env.TWITTER_USERNAME;
-        forwardTweets(groupId, twitterUsername, 5);
+    for (const chatId of chatIds) {
+        try {
+            await bot.sendMessage(chatId, message, options);
+            console.log(`Forwarded tweet to chatId ${chatId}`);
+        } catch (error) {
+            console.error(`Error sending message to chatId ${chatId}:`, error);
+        }
     }
+}
+
+// Telegram bot command handlers
+bot.onText(/\/start/, msg => {
+    const chatId = msg.chat.id;
 
     if (!chatIds.has(chatId)) {
         chatIds.add(chatId);
         bot.sendMessage(chatId, 'You have been added to the tweet notification list!');
+        console.log(`Added chatId ${chatId} to notification list.`);
     } else {
         bot.sendMessage(chatId, 'You are already on the tweet notification list.');
     }
 });
-let lastTweetId = null;
 
-async function forwardMyTweets(tweetCount = 5) {
-    try {
-        const user = await twitterClient.v2.me();
-
-        const params = {
-            max_results: tweetCount,
-            exclude: "retweets", // Exclude retweets
-        };
-
-        if (lastTweetId) {
-            params.since_id = lastTweetId;
-        }
-
-        const tweetsPaginator = await twitterClient.v2.userTimeline(user.data.id, params);
-
-        const tweets = tweetsPaginator._realData?.data;
-
-        if (!tweets || !Array.isArray(tweets) || tweets.length === 0) {
-            console.log('No new tweets found.');
-            return;
-        }
-
-        lastTweetId = tweets[0].id;
-
-        for (const tweet of tweets) {
-            const message = `<b>New tweet from @${user.data.username}</b>:\n\n${tweet.text}\n`;
-            const tweetUrl = `https://x.com/${user.data.username}/status/${tweet.id}`;
-
-            const options = {
-                parse_mode: 'HTML',
-                reply_markup: JSON.stringify({
-                    inline_keyboard: [
-                        [{ text: 'View Tweet', url: tweetUrl }]
-                    ]
-                })
-            };
-
-            for (const chatId of chatIds) {
-                await bot.sendMessage(chatId, message, options);
-
-                const mediaAttachments = tweetsPaginator.includes?.media;
-                if (mediaAttachments && Array.isArray(mediaAttachments) && mediaAttachments.length > 0) {
-                    for (const media of mediaAttachments) {
-                        if (media.type === 'photo') {
-                            await bot.sendPhoto(chatId, media.url);
-                        } else if (media.type === 'video') {
-                            await bot.sendVideo(chatId, media.url);
-                        }
-                    }
-                }
-            }
-        }
-    } catch (error) {
-        console.error('Error fetching tweets:', error.message);
-        for (const chatId of chatIds) {
-            bot.sendMessage(chatId, `Error fetching tweets: ${error.message}`);
-        }
-    }
-}
-cron.schedule('*/5 * * * *', () => {
-    forwardMyTweets(5);
-    console.log('Forwarding tweets to all registered chat IDs...');
-});
-
-bot.onText(/\/forward (.+)/, (msg, match) => {
-    const username = match[1];
+bot.onText(/\/stop/, msg => {
     const chatId = msg.chat.id;
-    bot.sendMessage(chatId, `Fetching and forwarding tweets from @${username}...`);
-    forwardTweets(chatId, username);
+
+    if (chatIds.has(chatId)) {
+        chatIds.delete(chatId);
+        bot.sendMessage(chatId, 'You have been removed from the tweet notification list.');
+        console.log(`Removed chatId ${chatId} from notification list.`);
+    } else {
+        bot.sendMessage(chatId, 'You are not on the tweet notification list.');
+    }
 });
+async function setupStream() {
+    const stream = await twitterClient.v2.searchStream({
+        'tweet.fields': ['author_id', 'created_at'],
+    });
+
+    stream.on(ETwitterStreamEvent.Data, tweet => {
+        console.log(`Tweet from ${tweet.data.author_id}: ${tweet.data.text}`);
+    });
+
+    stream.on(ETwitterStreamEvent.Error, error => {
+        console.error('Error:', error);
+    });
+
+    stream.on(ETwitterStreamEvent.ConnectionLost, () => {
+        console.warn('Stream connection lost. Reconnecting...');
+        setupStream();
+    });
+}
+
+// Start the stream
+// setupStream().catch(console.error);
+startStream();
 
 app.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);
