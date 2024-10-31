@@ -14,7 +14,7 @@ const twitterClient = new TwitterApi(process.env.TWITTER_BEARER_TOKEN);
 const bot = new TelegramBot(process.env.TOKEN, { polling: true });
 
 const chatIds = new Set();
-let lastTweetId = null;
+let lastTweetId = '1851757212139450812';
 
 async function pollTweets() {
     try {
@@ -23,9 +23,9 @@ async function pollTweets() {
             max_results: 5,
             since_id: lastTweetId,
         });
-
-        if (tweets.length > 0) {
-            tweets.reverse().forEach(tweet => {
+        console.log("ss", tweets.data)
+        if (tweets.data.length > 0) {
+            tweets.data.reverse().forEach(tweet => {
                 forwardTweet(tweet);
                 lastTweetId = tweet.id;
             });
@@ -37,10 +37,22 @@ async function pollTweets() {
 
 async function forwardTweet(tweet) {
     const tweetUrl = `https://twitter.com/${process.env.TWITTER_USERNAME}/status/${tweet.id}`;
-    const message = `<b>New tweet from @${process.env.TWITTER_USERNAME}</b>:\n\n${tweet.text}\n<a href="${tweetUrl}">View Tweet</a>`;
+    const tweetDate = new Date(tweet.created_at).toLocaleString();
+
+    const message = `<b>New tweet from @${process.env.TWITTER_USERNAME}</b>:\n\n${tweet.text}\n\n📅 <i>${tweetDate}</i>`;
 
     const options = {
         parse_mode: 'HTML',
+        reply_markup: {
+            inline_keyboard: [
+                [
+                    {
+                        text: "🔗 View Tweet",
+                        url: tweetUrl,
+                    },
+                ],
+            ],
+        },
         disable_web_page_preview: true,
     };
 
@@ -53,6 +65,7 @@ async function forwardTweet(tweet) {
         }
     }
 }
+
 
 bot.onText(/\/start/, msg => {
     const chatId = msg.chat.id;
