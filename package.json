@@ -20,6 +20,6 @@
     "node-cron": "^3.0.3",
     "node-telegram-bot-api": "^0.61.0",
     "nodemon": "^2.0.20",
-    "twitter-api-v2": "^1.17.2"
+    "twitter-api-v2": "^1.18.1"
   }
 }
