@@ -6,15 +6,15 @@ const TelegramBot = require('node-telegram-bot-api');
 const app = express();
 app.use(express.json());
 
-const PORT = process.env.PORT || 3000;
-const POLLING_INTERVAL = 5 * 60 * 1000;
+const PORT = process.env.PORT || 4000;
+const POLLING_INTERVAL = 2 * 60 * 1000;
 
 const twitterClient = new TwitterApi(process.env.TWITTER_BEARER_TOKEN);
 
 const bot = new TelegramBot(process.env.TOKEN, { polling: true });
 
 const chatIds = new Set();
-let lastTweetId = '1851757212139450812';
+let lastTweetId = '1858133427062706588';
 
 async function pollTweets() {
     try {
@@ -23,7 +23,6 @@ async function pollTweets() {
             max_results: 5,
             since_id: lastTweetId,
         });
-        console.log("ss", tweets.data)
         if (tweets.data.length > 0) {
             tweets.data.reverse().forEach(tweet => {
                 forwardTweet(tweet);
