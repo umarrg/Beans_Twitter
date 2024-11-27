@@ -7,7 +7,7 @@ const app = express();
 app.use(express.json());
 
 const PORT = process.env.PORT || 4000;
-const POLLING_INTERVAL = 2 * 60 * 1000;
+const POLLING_INTERVAL = 5 * 60 * 1000;
 
 const twitterClient = new TwitterApi(process.env.TWITTER_BEARER_TOKEN);
 
